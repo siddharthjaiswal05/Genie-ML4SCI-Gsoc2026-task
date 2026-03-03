@@ -1,16 +1,13 @@
-# Specific Task 4 — Non-local GNN for Quark/Gluon Jet Classification
+# Task 4 Non-local GNN for Jet Classification
 ## ML4SCI GSoC 2026
-
----
 
 ## Overview
 
-This task builds a **Non-local Graph Neural Network** and compares it against the local DGCNN baseline from Common Task 2. The central question is whether allowing every particle in a jet to attend to every other particle — regardless of spatial distance — improves classification performance over a model restricted to local neighbourhood interactions only.
+This task builds a **Non-local Graph Neural Network** and compares it against the local DGCNN baseline from Common Task 2. The central question is whether allowing every particle in a jet to attend to every other particle, regardless of spatial distance, improves classification performance over a model restricted to local neighbourhood interactions only.
 
 **Dataset:** 30,000 jet events sampled from 139,306 total (same subset and split as Task 2)  
-**Implementation:** Pure PyTorch — no external GNN library required
+**Implementation:** Pure PyTorch, no external GNN library required
 
----
 
 ## Results Summary
 
@@ -25,7 +22,6 @@ This task builds a **Non-local Graph Neural Network** and compares it against th
 
 The non-local model achieves a consistent improvement of **+0.0033 AUC** over the local baseline. Both models were trained on identical splits (SEED=42) under identical conditions for a fair comparison.
 
----
 
 ## The Core Distinction: Local vs Non-local
 
@@ -57,10 +53,9 @@ Captures:
   - Patterns invisible to local neighbourhood aggregation
 ```
 
----
+
 
 ## Architecture
-
 ### Full Pipeline
 
 ```
@@ -93,7 +88,7 @@ Captures:
   P(gluon),  P(quark)
 ```
 
----
+
 
 ## NonLocalBlock: How Self-Attention Works Over Jets
 
@@ -139,36 +134,24 @@ This follows the standard Transformer block design. The residual connections ens
 
 All jets in a batch are padded to MAX_NODES=200 and processed in **one GPU call** using `nn.MultiheadAttention` with a key_padding_mask. Pad positions are masked so they never contribute to or receive attention. This avoids Python loops over graphs and keeps gradients clean.
 
-Jets with more than 200 nodes are truncated to the 200 highest-energy deposits. This covers approximately 90% of events in the dataset.
+Jets with more than 200 nodes are truncated to the 200 highest energy deposits. This covers approximately 90% of events in the dataset.
 
 ### Position in the architecture
 
 The NonLocalBlock is placed **between** the second and third EdgeConv layers deliberately:
 
-- EdgeConv-1 and EdgeConv-2 first learn local particle-cluster features (what type of energy deposit is this, and what are its immediate neighbours?)
+- EdgeConv 1 and EdgeConv-2 first learn local particle-cluster features (what type of energy deposit is this, and what are its immediate neighbours?)
 - NonLocalBlock injects global jet context into every node embedding
-- EdgeConv-3 then refines local features using that enriched global context
+- EdgeConv 3 then refines local features using that enriched global context
 
 Placing the non-local block at the start (before any local layers) would mean attending over raw 5-dimensional features with no learned structure. Placing it at the end means the final local layer cannot use the global context. The middle placement is the design that benefits most from both components.
 
----
-
-## Gradient Safety: Why the Previous Version Failed
-
-The first implementation of this notebook produced AUC=0.5000 from epoch 1 — identical to random guessing. The loss was stuck at exactly 0.6931 = ln(2), meaning the model predicted 50/50 for every input regardless of the jet content.
-
-**Root cause:** `scatter_reduce_(reduce='amax')` was used for max-pooling edge features into node embeddings. In PyTorch 2.9, this in-place operation produces zero gradients for all non-argmax elements. For sparse jet graphs where most nodes never win the max competition, this meant effectively no gradient flowed back through the network at all.
-
-**Fix:** Replaced every `scatter_reduce_` call with `index_add_` (sum) followed by division (mean). `index_add_` has a gradient of exactly 1 for every contributing element — it is always differentiable across all PyTorch versions. This is equivalent to GraphSAGE-mean aggregation.
-
-A gradient check cell was added that runs one forward-backward pass before training begins and reports how many parameters received non-zero gradients. Both models confirmed clean gradient flow before training:
 
 ```
 Baseline DGCNN:  loss=0.7715  params_with_grad=24  zero_grad=0  none_grad=0  -- OK
 Non-local GNN:   loss=0.8261  params_with_grad=36  zero_grad=0  none_grad=0  -- OK
 ```
 
----
 
 ## Training Details
 
@@ -179,9 +162,8 @@ Non-local GNN:   loss=0.8261  params_with_grad=36  zero_grad=0  none_grad=0  -- 
 | LR schedule | CosineAnnealingLR (1e-3 to 1e-5) | Smooth decay; better than step decay for this task |
 | Gradient clipping | max_norm=1.0 | Prevents gradient spikes from variable-size graphs |
 | Early stopping | patience=8 on Val AUC | Stops when ROC-AUC plateaus |
-| Batch size | 32 | Reduced from Task 2 because NonLocalBlock holds B x MAX_NODES x MAX_NODES in VRAM |
 
-### Baseline training log (selected)
+### Baseline training log 
 
 ```
   001/40   0.6577   0.6455   0.7286   64.73%
@@ -203,7 +185,6 @@ Non-local GNN:   loss=0.8261  params_with_grad=36  zero_grad=0  none_grad=0  -- 
 
 Both models converged smoothly without overfitting. The non-local model converges slightly more slowly in early epochs, which is expected — the self-attention weights need more iterations to learn meaningful long-range patterns compared to fixed k-NN edges.
 
----
 
 ## Result Analysis
 
@@ -225,13 +206,11 @@ The Non-local GNN score distribution (right panel) shows slightly better separat
 
 A +0.0033 AUC improvement is consistent with what the literature reports for non-local additions to jet GNNs on 30k training samples. Several factors limit the gain:
 
-**Quark/gluon ambiguity is fundamental.** In QCD, the quark/gluon label is not perfectly well-defined at the parton level — some events are genuinely ambiguous regardless of model sophistication. This sets a practical ceiling well below AUC=1.0.
+**Quark/gluon ambiguity is fundamental.** In QCD, the quark/gluon label is not perfectly well defined at the parton level, some events are genuinely ambiguous regardless of model sophistication. This sets a practical ceiling well below AUC=1.0.
 
-**Dataset size.** Self-attention has more parameters to learn (Q, K, V projection matrices plus the 4-head structure add 132,480 parameters over the baseline). With 22,500 training events, the attention weights are not fully converged. On the full 139,306-event dataset, the improvement would likely be larger.
+**Dataset size.** Self attention has more parameters to learn (Q, K, V projection matrices plus the 4-head structure add 132,480 parameters over the baseline). With 22,500 training events, the attention weights are not fully converged. On the full 139,306-event dataset, the improvement would likely be larger.
 
 **MAX_NODES truncation.** Jets with more than 200 nodes (approximately 10% of events) have their lowest-energy deposits discarded before attention. Some long-range correlations in these dense jets are lost.
-
----
 
 ## Physics Interpretation
 
@@ -244,7 +223,6 @@ The local DGCNN captures these differences primarily through the angular spread 
 
 The attention weight matrix, if visualised per event, would show gluon jets with more distributed attention (many nodes attending to many others) and quark jets with more concentrated attention (most weight on the hard core).
 
----
 
 ## File Outputs
 
